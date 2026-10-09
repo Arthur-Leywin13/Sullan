@@ -14,7 +14,7 @@ const AntiLinkKick = require("./antilinkick.js");
 const { antibugHandler } = require("./antibug.js");
 const textfx = require("./textfx");
 const store = require("./store");
-const { handleReactionDownload, prefetchViewOnce } = require("./reaction");
+const { handleNiceDownload, prefetchViewOnce } = require("./reaction");
 
 function bindHandlers(sock) {
   const settings = typeof loadSettings === "function" ? loadSettings() : {};
@@ -26,13 +26,23 @@ function bindHandlers(sock) {
     const msg = messages[0];
     if (!msg?.message || !msg.key?.remoteJid) return;
 
-    store.save(msg); // cache pour le téléchargement par réaction 👍
+    store.save(msg); // cache des messages récents
     // Précharge IMMÉDIATEMENT les médias vue-unique (avant qu'ils ne soient ouverts et
     // invalidés par WhatsApp) — ne bloque pas le traitement du reste du message.
     prefetchViewOnce(msg).catch(() => {});
 
     const jid = msg.key.remoteJid;
     const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+
+    // ✅ Téléchargement vue-unique par ".Nice" (propriétaire uniquement)
+    if (msg.key.fromMe && text.trim().toLowerCase() === ".nice") {
+      try {
+        await handleNiceDownload(sock, msg);
+      } catch (err) {
+        console.error("❌ Nice Error:", err.message || err);
+      }
+      return;
+    }
 
     // ✅ AntiDelete
     if (settings.ANTIDELETE === true) {
@@ -192,14 +202,6 @@ function bindHandlers(sock) {
       }
     } catch (err) {
       console.error("❌ AutoGreet Error:", err.message);
-    }
-  });
-
-  // ✅ Téléchargement par réaction 👍 (remplace l'ancienne commande .vv)
-  sock.ev.on("messages.reaction.update", async (reactions) => {
-    for (const item of reactions) {
-      try { await handleReactionDownload(sock, item); }
-      catch (err) { console.error("❌ Reaction Listener Error:", err.message); }
     }
   });
 }

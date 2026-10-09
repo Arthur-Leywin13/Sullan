@@ -47,4 +47,14 @@ function getBuffer(jid, id) {
   return buffers.get(`${jid}:${id}`) || null;
 }
 
-module.exports = { save, get, saveBuffer, getBuffer };
+// Dernier média vue-unique décrypté pour une discussion donnée (le plus récent d'abord)
+function getLatestBufferForChat(jid) {
+  const prefix = `${jid}:`;
+  for (let i = bufferOrder.length - 1; i >= 0; i--) {
+    const key = bufferOrder[i];
+    if (key.startsWith(prefix)) return buffers.get(key) || null;
+  }
+  return null;
+}
+
+module.exports = { save, get, saveBuffer, getBuffer, getLatestBufferForChat };
