@@ -1,13 +1,12 @@
-// 📂 reaction.js — Réagis 👍 à un média (y compris à vue unique) pour le récupérer
-// discrètement dans tes propres messages personnels. Remplace l'ancienne commande .vv.
+// 📂 reaction.js — Envoie ".Nice" pour récupérer un média à vue unique discrètement dans tes
+// propres messages personnels. Remplace l'ancien déclencheur par réaction 👍.
 //
 // Le téléchargement réel se fait en 2 temps :
 //  1) prefetchViewOnce() — appelé DÈS la réception du message (bot-engine.js), avant que
 //     quiconque ait pu l'ouvrir. On décrypte et on garde le buffer en mémoire (store.js).
-//  2) handleReactionDownload() — au moment du 👍, on renvoie le buffer déjà en cache s'il
-//     existe ; sinon on tente un téléchargement direct (cas d'un média classique, pas vue
-//     unique, qui reste accessible plus longtemps).
-// Sans ça, attendre la réaction pour télécharger arrive souvent trop tard : WhatsApp
+//  2) handleNiceDownload() — quand le propriétaire envoie ".Nice" (en réponse à un vue-unique,
+//     ou sans réponse pour prendre le dernier de la discussion), on renvoie le buffer en cache.
+// Sans ça, attendre la commande pour télécharger arrive souvent trop tard : WhatsApp
 // invalide le fichier vue-unique côté serveur dès qu'il a été ouvert par le destinataire.
 
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
@@ -79,29 +78,30 @@ async function prefetchViewOnce(msg) {
   }
 }
 
-// `item` = un élément de l'événement Baileys "messages.reaction.update" :
-// { key: <clé du message visé>, reaction: { text, key, senderTimestampMs } }
-async function handleReactionDownload(sock, item) {
+// `msg` = message texte envoyé par le propriétaire (".Nice"). Si c'est une réponse à un
+// message vue-unique, on récupère celui-ci ; sinon, le dernier vue-unique de la discussion.
+async function handleNiceDownload(sock, msg) {
   try {
-    const emoji = item?.reaction?.text;
-    if (emoji !== "👍") return; // uniquement le pouce levé
+    const jid = msg.key.remoteJid;
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    let data = null;
 
-    const remoteJid = item.key?.remoteJid;
-    const messageId = item.key?.id;
-    if (!remoteJid || !messageId) return;
-
-    // 1) buffer déjà décrypté à la réception (cas vue-unique) → priorité
-    let data = store.getBuffer(remoteJid, messageId);
-
-    // 2) sinon, tentative de téléchargement direct depuis le message mis en cache
-    if (!data) {
-      const targetMessage = store.get(remoteJid, messageId);
-      if (!targetMessage) return; // message trop ancien / jamais vu passer
-      const inner = extractMediaMessage(targetMessage);
-      if (!inner) return; // pas un média
-      data = await downloadMedia(inner);
+    // 1) réponse à un message vue-unique → buffer en cache, sinon téléchargement direct
+    if (ctx?.stanzaId && ctx.quotedMessage && isViewOnce(ctx.quotedMessage)) {
+      data = store.getBuffer(jid, ctx.stanzaId);
+      if (!data) {
+        const inner = extractMediaMessage(ctx.quotedMessage);
+        data = await downloadMedia(inner);
+      }
     }
-    if (!data) return;
+
+    // 2) sinon, le vue-unique le plus récent de cette discussion
+    if (!data) data = store.getLatestBufferForChat(jid);
+
+    if (!data) {
+      console.log("[Nice] Aucun vue unique trouvé");
+      return;
+    }
 
     const { type, buffer, caption, mimetype, ptt } = data;
     const payload = { [type]: buffer };
@@ -111,12 +111,12 @@ async function handleReactionDownload(sock, item) {
       payload.ptt = Boolean(ptt);
     }
 
-    // Envoi discret dans les messages personnels du compte connecté (aucune confirmation dans le chat)
-    const myJid = sock.user?.id ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : remoteJid;
+    // Envoi discret dans les messages personnels du compte connecté (aucun message dans le chat)
+    const myJid = sock.user?.id ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : jid;
     await sock.sendMessage(myJid, payload);
   } catch (err) {
-    console.error("[Reaction Download] Erreur :", err.message || err);
+    console.error("[Nice Download] Erreur :", err.message || err);
   }
 }
 
-module.exports = { handleReactionDownload, prefetchViewOnce, extractMediaMessage, isViewOnce };
+module.exports = { handleNiceDownload, prefetchViewOnce, extractMediaMessage, isViewOnce };
